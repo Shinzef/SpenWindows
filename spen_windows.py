@@ -17,47 +17,74 @@ from spen_adb import (
 user32   = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-# SendInput definitions
+# Pointer Device Injection API definitions
 
-MOUSEEVENTF_MOVE        = 0x0001
-MOUSEEVENTF_LEFTDOWN    = 0x0002
-MOUSEEVENTF_LEFTUP      = 0x0004
-MOUSEEVENTF_RIGHTDOWN   = 0x0008
-MOUSEEVENTF_RIGHTUP     = 0x0010
-MOUSEEVENTF_ABSOLUTE    = 0x8000
-MOUSEEVENTF_VIRTUALDESK = 0x4000   # coords span ALL monitors
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-INPUT_MOUSE = 0
-
-class MOUSEINPUT(ctypes.Structure):
+class POINTER_INFO(ctypes.Structure):
     _fields_ = [
-        ("dx",          ctypes.c_long),
-        ("dy",          ctypes.c_long),
-        ("mouseData",   ctypes.c_ulong),
-        ("dwFlags",     ctypes.c_ulong),
-        ("time",        ctypes.c_ulong),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("pointerType", ctypes.c_uint32),
+        ("pointerId", ctypes.c_uint32),
+        ("frameId", ctypes.c_uint32),
+        ("pointerFlags", ctypes.c_uint32),
+        ("sourceDevice", ctypes.c_void_p),
+        ("hwndTarget", ctypes.c_void_p),
+        ("ptPixelLocation", POINT),
+        ("ptHimetricLocation", POINT),
+        ("ptPixelLocationRaw", POINT),
+        ("ptHimetricLocationRaw", POINT),
+        ("dwTime", ctypes.c_uint32),
+        ("historyCount", ctypes.c_uint32),
+        ("InputData", ctypes.c_int32),
+        ("dwKeyStates", ctypes.c_uint32),
+        ("PerformanceCount", ctypes.c_uint64),
+        ("ButtonChangeType", ctypes.c_int32),
     ]
 
-class _INPUT_UNION(ctypes.Union):
-    _fields_ = [("mi", MOUSEINPUT)]
+class POINTER_PEN_INFO(ctypes.Structure):
+    _fields_ = [
+        ("pointerInfo", POINTER_INFO),
+        ("penFlags", ctypes.c_uint32),
+        ("penMask", ctypes.c_uint32),
+        ("pressure", ctypes.c_uint32),
+        ("rotation", ctypes.c_uint32),
+        ("tiltX", ctypes.c_int32),
+        ("tiltY", ctypes.c_int32),
+    ]
 
-class INPUT(ctypes.Structure):
-    _fields_ = [("type", ctypes.c_ulong), ("_u", _INPUT_UNION)]
+class _POINTER_TYPE_INFO_UNION(ctypes.Union):
+    _fields_ = [("penInfo", POINTER_PEN_INFO)]
 
-def send_input(*inputs):
-    arr = (INPUT * len(inputs))(*inputs)
-    user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+class POINTER_TYPE_INFO(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_uint32), ("u", _POINTER_TYPE_INFO_UNION)]
 
-def make_mouse_input(flags, dx=0, dy=0, data=0) -> INPUT:
-    mi = MOUSEINPUT(dx=dx, dy=dy, mouseData=data,
-                    dwFlags=flags, time=0,
-                    dwExtraInfo=ctypes.pointer(ctypes.c_ulong(0)))
-    inp = INPUT(type=INPUT_MOUSE)
-    inp._u.mi = mi
-    return inp
+PT_PEN = 3
+POINTER_FEEDBACK_NONE = 3
 
-# Virtual desktop info (for absolute mouse coordinates)
+POINTER_FLAG_NONE = 0x00000000
+POINTER_FLAG_NEW = 0x00000001
+POINTER_FLAG_INRANGE = 0x00000002
+POINTER_FLAG_INCONTACT = 0x00000004
+POINTER_FLAG_FIRSTBUTTON = 0x00000010
+POINTER_FLAG_SECONDBUTTON = 0x00000020
+POINTER_FLAG_DOWN = 0x00010000
+POINTER_FLAG_UPDATE = 0x00020000
+POINTER_FLAG_UP = 0x00040000
+
+# PEN_FLAGS
+PEN_FLAG_NONE = 0x00000000
+PEN_FLAG_BARREL = 0x00000001
+PEN_FLAG_ERASER = 0x00000004
+
+# PEN_MASK
+PEN_MASK_NONE = 0x00000000
+PEN_MASK_PRESSURE = 0x00000001
+PEN_MASK_ROTATION = 0x00000002
+PEN_MASK_TILT_X = 0x00000004
+PEN_MASK_TILT_Y = 0x00000008
+
+# Virtual desktop info (for absolute pixel coordinates)
 
 SM_XVIRTUALSCREEN  = 76
 SM_YVIRTUALSCREEN  = 77
@@ -71,26 +98,28 @@ def get_virtual_desktop():
     h = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
     return x, y, w, h
 
-def norm_to_absolute(nx: float, ny: float):
-    """Normalized tablet coords → SendInput absolute units (0–65535)."""
-    return int(nx * 65535), int(ny * 65535)
-
 # Injector
 
 class DesktopPenInjector:
     """
-    Maps S Pen input to whole-desktop mouse events.
+    Maps S Pen input to synthetic Windows Pointer API events.
 
-    Pen tip touching  = left mouse button held
-    Side button       = right mouse button held
-    Hover             = cursor moves, no buttons
+    Pen tip touching  = In contact
+    Side button       = Barrel button
+    Hover             = In range
     """
 
-    def __init__(self, deadzone: float = 0.005):
+    def __init__(self, vx, vy, vw, vh, deadzone: float = 0.005):
         self.deadzone  = deadzone
-        self._lmb_down = False
-        self._rmb_down = False
+        self.vx = vx
+        self.vy = vy
+        self.vw = vw
+        self.vh = vh
+        
+        self._in_range = False
+        self._is_down  = False
         self._frame    = 0
+        
         self.swap_axes = False
         self.invert_x = False
         self.invert_y = False
@@ -98,13 +127,73 @@ class DesktopPenInjector:
         self.offset_x  = 0.0
         self.offset_y  = 0.0
 
+        # Initialize the synthetic pen device
+        self._device = user32.CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_NONE)
+        if not self._device:
+            print("Failed to initialize Windows Synthetic Pointer Device")
+            sys.exit(1)
+
+    def __del__(self):
+        if hasattr(self, '_device') and self._device:
+            user32.DestroySyntheticPointerDevice(self._device)
+
+    def cleanup(self):
+        if self._in_range:
+            self._send_pointer_event(self._last_x, self._last_y, 0, 0, 0, False, False, leaving_range=True)
+        if self._device:
+            user32.DestroySyntheticPointerDevice(self._device)
+            self._device = None
+
+    def _send_pointer_event(self, x, y, pressure, tilt_x, tilt_y, touching, side_btn, leaving_range=False):
+        pen = POINTER_PEN_INFO()
+        pen.pointerInfo.pointerType = PT_PEN
+        pen.pointerInfo.pointerId = 0
+        pen.pointerInfo.ptPixelLocation.x = int(x)
+        pen.pointerInfo.ptPixelLocation.y = int(y)
+
+        # Set masks and values
+        pen.penMask = PEN_MASK_PRESSURE | PEN_MASK_TILT_X | PEN_MASK_TILT_Y
+        pen.pressure = int(pressure * 1024)
+        pen.tiltX = int(tilt_x)
+        pen.tiltY = int(tilt_y)
+        
+        pen.penFlags = PEN_FLAG_BARREL if side_btn else PEN_FLAG_NONE
+
+        flags = 0
+        if not self._in_range and not leaving_range:
+            flags |= POINTER_FLAG_NEW | POINTER_FLAG_INRANGE
+            self._in_range = True
+        elif leaving_range:
+            flags |= POINTER_FLAG_UPDATE
+            self._in_range = False
+        else:
+            flags |= POINTER_FLAG_INRANGE | POINTER_FLAG_UPDATE
+
+        if not leaving_range:
+            if touching and not self._is_down:
+                flags |= POINTER_FLAG_INCONTACT | POINTER_FLAG_DOWN | POINTER_FLAG_FIRSTBUTTON
+                self._is_down = True
+            elif touching and self._is_down:
+                flags |= POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON
+            elif not touching and self._is_down:
+                flags |= POINTER_FLAG_UP
+                self._is_down = False
+
+        pen.pointerInfo.pointerFlags = flags  
+
+        info = POINTER_TYPE_INFO()
+        info.type = PT_PEN
+        info.u.penInfo = pen
+
+        res = user32.InjectSyntheticPointerInput(self._device, ctypes.pointer(info), 1)
+        if res == 0:
+             pass
+
     def inject(self, state: PenState):
-        # Apply optional axis swap/invert before converting to absolute units
         nx, ny = state.x, state.y
         if self.swap_axes:
             nx, ny = ny, nx
 
-        # Adjust the "Active Area" so you don't have to reach across the entire tablet
         if self.scale != 1.0 or self.offset_x != 0.0 or self.offset_y != 0.0:
             nx = (nx - self.offset_x) * self.scale
             ny = (ny - self.offset_y) * self.scale
@@ -116,42 +205,25 @@ class DesktopPenInjector:
         if self.invert_y:
             ny = 1.0 - ny
 
-        ax, ay = norm_to_absolute(nx, ny)
+        # Map to virtual desktop pixels
+        px = self.vx + (nx * self.vw)
+        py = self.vy + (ny * self.vh)
+        
+        self._last_x = px
+        self._last_y = py
 
-        # Always move cursor
-        inputs = [make_mouse_input(
-            MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-            dx=ax, dy=ay
-        )]
-
-        # Left button — pen tip contact
         touching = state.touching and state.pressure > self.deadzone
-        if touching and not self._lmb_down:
-            inputs.append(make_mouse_input(MOUSEEVENTF_LEFTDOWN))
-            self._lmb_down = True
-        elif not touching and self._lmb_down:
-            inputs.append(make_mouse_input(MOUSEEVENTF_LEFTUP))
-            self._lmb_down = False
+        self._send_pointer_event(px, py, state.pressure, state.tilt_x, state.tilt_y, touching, state.button)
 
-        # Right button — S Pen side button
-        if state.button and not self._rmb_down:
-            inputs.append(make_mouse_input(MOUSEEVENTF_RIGHTDOWN))
-            self._rmb_down = True
-        elif not state.button and self._rmb_down:
-            inputs.append(make_mouse_input(MOUSEEVENTF_RIGHTUP))
-            self._rmb_down = False
-
-        send_input(*inputs)
         self._frame += 1
-
         if self._frame % 30 == 0:
-            action = "DOWN" if self._lmb_down else "HOVER"
+            action = "DOWN" if self._is_down else "HOVER"
             print(
                 f"\r[{state.seq:6d}] {action:<5s}  "
                 f"x={state.x:.3f}  y={state.y:.3f}  "
                 f"p={state.pressure:.3f}  "
                 f"tilt=({state.tilt_x:+.0f}°,{state.tilt_y:+.0f}°)  "
-                f"LMB={self._lmb_down}  RMB={self._rmb_down}",
+                f"LMB={self._is_down}  RMB={state.button} ",
                 end="", flush=True
             )
 
@@ -202,7 +274,7 @@ def main():
     from spen_adb import AXIS_DEFAULTS
     axis_cal = read_axis_calibration(event_dev) if not args.wireless else AXIS_DEFAULTS
 
-    injector = DesktopPenInjector(deadzone=args.deadzone)
+    injector = DesktopPenInjector(vx, vy, vw, vh, deadzone=args.deadzone)
     injector.swap_axes = args.swap_axes
     injector.invert_x  = args.invert_x
     injector.invert_y  = args.invert_y
@@ -226,10 +298,7 @@ def main():
                 callback = injector.inject,
             )
     finally:
-        if injector._lmb_down:
-            send_input(make_mouse_input(MOUSEEVENTF_LEFTUP))
-        if injector._rmb_down:
-            send_input(make_mouse_input(MOUSEEVENTF_RIGHTUP))
+        injector.cleanup()
         print("\nStopped.")
 
 if __name__ == "__main__":
