@@ -40,7 +40,6 @@ int main(int argc, char *argv[]) {
         ssize_t n = read(fd, &ev, sizeof(ev));
         if (n != sizeof(ev)) continue;
 
-        // send raw binary event (fast + minimal overhead)
         sendto(sock, &ev, sizeof(ev), 0,
                (struct sockaddr*)&addr, sizeof(addr));
     }

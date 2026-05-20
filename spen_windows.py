@@ -1,24 +1,8 @@
-#!/usr/bin/env python3
 """
-spen_windows.py  (v2 — whole desktop)
+spen_windows.py 
 ======================================
 Moves the actual Windows mouse cursor using SendInput with absolute
-coordinates, so the S Pen controls the entire desktop — no focused
-app required.
-
-Pressure is injected via a secondary WM_POINTER message for apps
-that support Windows Ink (Krita, CSP, etc.), but cursor movement
-works in everything including the taskbar, browser, file explorer.
-
-Usage:
-    python spen_windows.py
-    python spen_windows.py --event 4
-    python spen_windows.py --deadzone 0.01     # ignore pressure < 1%
-
-Requirements:
-    No pip installs — stdlib + ctypes only.
-    ADB in PATH.
-    spen_adb.py in the same folder.
+coordinates.
 """
 
 import sys, os, ctypes, ctypes.wintypes as wt, argparse
@@ -33,7 +17,7 @@ from spen_adb import (
 user32   = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-# ── SendInput structures ──────────────────────────────────────────────────
+# SendInput definitions
 
 MOUSEEVENTF_MOVE        = 0x0001
 MOUSEEVENTF_LEFTDOWN    = 0x0002
@@ -73,7 +57,7 @@ def make_mouse_input(flags, dx=0, dy=0, data=0) -> INPUT:
     inp._u.mi = mi
     return inp
 
-# ── Virtual desktop metrics ───────────────────────────────────────────────
+# Virtual desktop info (for absolute mouse coordinates)
 
 SM_XVIRTUALSCREEN  = 76
 SM_YVIRTUALSCREEN  = 77
@@ -91,16 +75,15 @@ def norm_to_absolute(nx: float, ny: float):
     """Normalized tablet coords → SendInput absolute units (0–65535)."""
     return int(nx * 65535), int(ny * 65535)
 
-# ── Injector ─────────────────────────────────────────────────────────────
+# Injector
 
 class DesktopPenInjector:
     """
     Maps S Pen input to whole-desktop mouse events.
 
-    Pen tip touching  → left mouse button held
-    Side button       → right mouse button held
-    Hover             → cursor moves, no buttons
-    Eraser            → treated as hover (lift = release LMB)
+    Pen tip touching  = left mouse button held
+    Side button       = right mouse button held
+    Hover             = cursor moves, no buttons
     """
 
     def __init__(self, deadzone: float = 0.005):
@@ -172,11 +155,11 @@ class DesktopPenInjector:
                 end="", flush=True
             )
 
-# ── Entry point ───────────────────────────────────────────────────────────
+# Main
 
 def main():
     ap = argparse.ArgumentParser(
-        description="S Pen → whole-desktop cursor control via ADB + SendInput"
+        description="S Pen to Windows"
     )
     ap.add_argument("--event",    type=int,   default=None)
     ap.add_argument("--deadzone", type=float, default=0.005,

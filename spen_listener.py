@@ -1,3 +1,9 @@
+"""
+spen_listener.py
+======================================
+Listens for S Pen events from the spen_daemon.
+"""
+
 import socket
 import struct
 import select
@@ -11,7 +17,6 @@ from spen_adb import (
 
 PORT = 5005
 
-# Linux input_event layout from the Android daemon:
 # struct timeval { long tv_sec; long tv_usec; }
 # unsigned short type, code; int value;
 INPUT_EVENT = struct.Struct("qqHHi")
@@ -27,7 +32,6 @@ def listen_and_inject(injector_callback=None):
 
     try:
         while True:
-            # Use select with a timeout so KeyboardInterrupt (Ctrl-C) works cleanly
             ready = select.select([sock], [], [], 0.5)
             if not ready[0]:
                 continue
