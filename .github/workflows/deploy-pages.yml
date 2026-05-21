@@ -1,28 +1,32 @@
-name: Deploy PWA to GitHub Pages
+name: Deploy PWA to GitHub Pages (gh-pages)
 
 on:
   push:
     branches:
       - PWA
 
-permissions:
-  pages: write
-  id-token: write
-
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v3
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: 'spen-screenoff'
+          node-version: '18'
 
-      - name: Deploy
-        uses: actions/deploy-pages@v1
+      - name: Install dependencies
+        run: |
+          if [ -f package.json ]; then npm ci; fi
+
+      - name: Build (optional)
+        run: |
+          if [ -f package.json ] && [ -f build.sh ]; then ./build.sh; fi
+
+      - name: Deploy to GitHub Pages (gh-pages branch)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./spen-screenoff
