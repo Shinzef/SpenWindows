@@ -8,7 +8,6 @@ on:
 permissions:
   pages: write
   id-token: write
-  contents: read
 
 jobs:
   deploy:
@@ -17,27 +16,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Optional: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Optional: Install dependencies
-        run: |
-          if [ -f package.json ]; then npm ci; fi
-
-      - name: Optional: Build
-        run: |
-          # Place build commands here if your PWA needs a build step
-          if [ -f package.json ] && [ -f build.sh ]; then ./build.sh; fi
-
-      - name: Configure GitHub Pages
+      - name: Configure Pages
         uses: actions/configure-pages@v3
 
-      - name: Upload Pages artifact
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          path: spen-screenoff
+          path: 'spen-screenoff'
 
-      - name: Deploy to GitHub Pages
+      - name: Deploy
         uses: actions/deploy-pages@v1
