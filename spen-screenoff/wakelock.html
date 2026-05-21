@@ -12,7 +12,8 @@
 <body>
 <script>
 if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js');
+    // REMOVED THE LEADING SLASH HERE
+    navigator.serviceWorker.register('sw.js');
 }
 async function lock() {
     try {
