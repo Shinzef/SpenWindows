@@ -12,6 +12,7 @@ S Pen input bridge for Windows. Maps S Pen events from a Samsung tablet to the W
 - `spen_adb.py` — Reads and parses S Pen events from the tablet via ADB.
 - `spen_listener.py` — UDP listener for events emitted by the `spen_daemon` on the tablet.
 - `spen_daemon.c` — Small C daemon (for Android) that reads the tablet event device and sends events over UDP.
+- `launch.pwa.py` — Launches the fullscreen blackscreen PWA in Chrome on the tablet and lowers brightness to 0%.
 - `build-push-run-spen-daemon.ps1` — Helper to build the daemon, push it to the tablet, and run it.
 
 ## Quick usage
@@ -54,6 +55,14 @@ python spen_windows.py --wireless --swap-axes --invert-y --scale 3.1
 ```
 
 After the daemon is running on the tablet, run `spen_windows.py --wireless` on the PC.
+
+## Blackscreen PWA launcher
+
+If you want a simple fullscreen blackscreen setup on the tablet, run:
+
+```powershell
+python launch.pwa.py
+```
 
 ## Troubleshooting
 - Idk bru, check if adb is running and dev options are enabled.
